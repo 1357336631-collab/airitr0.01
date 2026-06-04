@@ -327,6 +327,7 @@ async function handleSend() {
     mimeType: att.mimeType,
     fileName: att.fileName,
     size: att.size,
+    url: att.url,
   }))
 
   // ── NEW: Inject text-based file content into the message ──
