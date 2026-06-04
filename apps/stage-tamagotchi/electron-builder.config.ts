@@ -161,7 +161,7 @@ export default {
   npmRebuild: true,
   publish: {
     provider: 'github',
-    owner: 'moeru-ai',
-    repo: 'airi',
+    owner: '1357336631-collab',
+    repo: 'airitr0.01',
   },
 } satisfies Configuration
