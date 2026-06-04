@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ChatAssistantMessage, ChatHistoryItem, ChatSlices, ChatSlicesText } from '../../../types/chat'
+import type { ChatAssistantMessage, ChatHistoryItem, ChatSlices, ChatSlicesFile, ChatSlicesText } from '../../../types/chat'
 
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, ref, useTemplateRef } from 'vue'
@@ -353,6 +353,30 @@ async function handleCommitEdit() {
   }
 }
 
+// ── File download helper ──
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function downloadFileSlice(slice: ChatSlicesFile) {
+  const byteString = atob(slice.data)
+  const bytes = new Uint8Array(byteString.length)
+  for (let i = 0; i < byteString.length; i++) {
+    bytes[i] = byteString.charCodeAt(i)
+  }
+  const blob = new Blob([bytes], { type: slice.mimeType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = slice.fileName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 const hasContentText = computed(() => {
   const content = props.message.content
   if (typeof content === 'string') {
@@ -591,6 +615,12 @@ const resolvedSlices = computed(() => {
       continue
     }
 
+    if (slice.type === 'file') {
+      processBuffer()
+      rs.push(slice)
+      continue
+    }
+
     if ((slice as any).type === 'reasoning') {
       // Typically skipped, reasoning can be styled separately or omitted
     }
@@ -711,6 +741,22 @@ const dynamicStyles = computed(() => {
                   class="mb-2"
                 />
                 <template v-else-if="slice.type === 'tool-call-result'" />
+
+                <!-- File download card -->
+                <div v-else-if="slice.type === 'file'" class="file-download-card mb-2 flex items-center gap-3 border border-primary-200 rounded-xl bg-primary-50/50 p-3 dark:border-primary-800 dark:bg-primary-900/30">
+                  <div class="i-solar:file-check-bold-duotone text-2xl text-primary-500 shrink-0" />
+                  <div class="flex-1 min-w-0">
+                    <div class="truncate text-sm text-primary-800 font-semibold dark:text-primary-200">{{ slice.fileName }}</div>
+                    <div class="text-xs text-primary-500">{{ formatFileSize(slice.size) }}</div>
+                  </div>
+                  <button
+                    class="flex shrink-0 items-center gap-1 rounded-lg bg-primary-500 px-3 py-1.5 text-xs text-white font-semibold transition-colors hover:bg-primary-600"
+                    @click="downloadFileSlice(slice)"
+                  >
+                    <div class="i-solar:download-minimalistic-bold-duotone" />
+                    下载
+                  </button>
+                </div>
                 <template v-else-if="slice.type === 'text'">
                   <MarkdownRenderer
                     :content="getSegmentedText(slice.text)"

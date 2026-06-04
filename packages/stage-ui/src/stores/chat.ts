@@ -32,11 +32,19 @@ import { useProactivityStore } from './proactivity'
 import { useProvidersStore } from './providers'
 import { useSettingsChat } from './settings/chat'
 
+export interface FileAttachment {
+  type: 'image' | 'file'
+  data: string
+  mimeType: string
+  fileName: string
+  size: number
+}
+
 export interface SendOptions {
   model?: string
   chatProvider?: string | ChatProvider
   providerConfig?: Record<string, unknown>
-  attachments?: { type: 'image', data: string, mimeType: string }[]
+  attachments?: FileAttachment[]
   tools?: StreamOptions['tools']
   input?: WebSocketEventInputs
   /**
@@ -330,6 +338,9 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
             inferenceContentParts.push(imagePart)
             historicalContentParts.push(imagePart)
           }
+          // File-type attachments: content already injected into message text
+          // by InteractiveArea.handleSend(), no content-part needed here.
+          // Attachments metadata is preserved on the user message for display.
         }
       }
 

@@ -118,6 +118,34 @@ const formattedArgs = computed(() => {
     return props.args
   }
 })
+
+// ── Downloadable tool result detection ──
+const isDownloadable = computed(() => {
+  if (props.state !== 'done' || !props.result)
+    return false
+  const downloadablePatterns = [
+    'write_file', 'create_file', 'generate_code', 'export',
+    'save', 'download', 'write',
+  ]
+  return downloadablePatterns.some(p => props.toolName.toLowerCase().includes(p))
+})
+
+function downloadToolResult() {
+  if (!props.result) return
+  const resultText = typeof props.result === 'string'
+    ? props.result
+    : JSON.stringify(props.result, null, 2)
+
+  const blob = new Blob([resultText], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${props.toolName.replace(/[^a-zA-Z0-9]/g, '_')}_result.txt`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
 </script>
 
 <template>
@@ -229,6 +257,17 @@ const formattedArgs = computed(() => {
 
       <div v-else class="whitespace-pre-wrap break-words text-[10px] font-mono op-80">
         {{ formattedArgs }}
+      </div>
+
+      <!-- ── Download button for tool results ── -->
+      <div v-if="isDownloadable && state === 'done'" class="mt-2 border-t border-primary-200/30 pt-2 dark:border-primary-800/30">
+        <button
+          class="flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs text-primary-600 font-medium transition-colors hover:bg-primary-100 dark:border-primary-800 dark:bg-primary-900/30 dark:text-primary-400 dark:hover:bg-primary-900/50"
+          @click="downloadToolResult"
+        >
+          <div class="i-solar:download-minimalistic-bold-duotone" />
+          下载结果
+        </button>
       </div>
     </div>
   </Collapsible>

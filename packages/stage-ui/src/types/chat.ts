@@ -20,7 +20,15 @@ export interface ChatSlicesToolCallResult {
   result?: string | CommonContentPart[]
 }
 
-export type ChatSlices = ChatSlicesText | ChatSlicesToolCall | ChatSlicesToolCallResult
+export interface ChatSlicesFile {
+  type: 'file'
+  fileName: string
+  mimeType: string
+  data: string
+  size: number
+}
+
+export type ChatSlices = ChatSlicesText | ChatSlicesToolCall | ChatSlicesToolCallResult | ChatSlicesFile
 
 export interface ChatAssistantMessage extends AssistantMessage {
   slices: ChatSlices[]
@@ -45,6 +53,13 @@ export interface ChatAssistantMessage extends AssistantMessage {
     chunks: { title: string, uri: string }[]
   }
   error?: { message: string, detail: string }
+  /** AI-generated files attached to this message (future: for download cards) */
+  files?: {
+    name: string
+    mimeType: string
+    data: string
+    size: number
+  }[]
 }
 
 export type ChatMessage = ChatAssistantMessage | SystemMessage | ToolMessage | UserMessage

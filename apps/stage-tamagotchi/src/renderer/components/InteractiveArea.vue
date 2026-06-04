@@ -39,7 +39,18 @@ import { toast } from 'vue-sonner'
 
 const router = useRouter()
 const messageInput = ref('')
-const attachments = ref<{ type: 'image', data: string, mimeType: string, url: string }[]>([])
+
+// ── Extended attachment type: supports both images and generic files ──
+interface UIAttachment {
+  type: 'image' | 'file'
+  data: string
+  mimeType: string
+  fileName: string
+  size: number
+  url: string
+}
+
+const attachments = ref<UIAttachment[]>([])
 
 const chatOrchestrator = useChatOrchestratorStore()
 const chatSession = useChatSessionStore()
@@ -71,6 +82,57 @@ const journalPreviewStore = useJournalPreviewStore()
 const visionStore = useVisionStore()
 const { openTextPreview, openImagePreview, closePreview } = journalPreviewStore
 
+// ── Helper: check if a MIME type is text-based (readable file content) ──
+function isTextFile(mimeType: string): boolean {
+  const textTypes = [
+    'text/', 'application/json', 'application/xml',
+    'application/javascript', 'application/typescript',
+    'application/x-yaml', 'application/x-sh',
+    'application/x-python', 'application/x-shellscript',
+    'application/x-httpd-php',
+  ]
+  return textTypes.some(t => mimeType.startsWith(t))
+}
+
+// ── Helper: human-readable file size ──
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ── Unified file attachment (handles both images and generic files) ──
+function addFileAttachment(file: File) {
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const base64Data = (e.target?.result as string)?.split(',')[1]
+    if (!base64Data) return
+
+    const isImage = file.type.startsWith('image/')
+    let url = ''
+    if (isImage) {
+      const binary = atob(base64Data)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      const blob = new Blob([bytes], { type: file.type })
+      url = URL.createObjectURL(blob)
+    }
+
+    attachments.value.push({
+      type: isImage ? 'image' : 'file',
+      data: base64Data,
+      mimeType: file.type,
+      fileName: file.name,
+      size: file.size,
+      url: url || '',
+    })
+  }
+  reader.readAsDataURL(file)
+}
+
+// ── Legacy image-only helper (kept for screenshot / internal image attach) ──
 function addImageAttachmentFromBase64(data: string, mimeType: string, _fileName?: string) {
   let url = ''
   try {
@@ -90,6 +152,8 @@ function addImageAttachmentFromBase64(data: string, mimeType: string, _fileName?
     type: 'image' as const,
     data,
     mimeType,
+    fileName: _fileName || 'image.png',
+    size: 0,
     url,
   })
 }
@@ -244,6 +308,7 @@ function updateWindowTitle() {
 
 let isOptimisticClearing = false
 
+// ── Core: handleSend with file content injection ──
 async function handleSend() {
   if (isComposing.value) {
     return
@@ -256,7 +321,47 @@ async function handleSend() {
   }
 
   const textToSend = messageInput.value
-  const attachmentsToSend = attachments.value.map(att => ({ ...att }))
+  const attachmentsToSend = attachments.value.map(att => ({
+    type: att.type,
+    data: att.data,
+    mimeType: att.mimeType,
+    fileName: att.fileName,
+    size: att.size,
+  }))
+
+  // ── NEW: Inject text-based file content into the message ──
+  let enrichedText = textToSend
+  const fileContexts: string[] = []
+
+  for (const att of attachmentsToSend) {
+    if (att.type === 'file') {
+      if (isTextFile(att.mimeType)) {
+        try {
+          const content = atob(att.data)
+          fileContexts.push(
+            `[FILE: ${att.fileName} (${formatFileSize(att.size)})]\n\`\`\`\n${content}\n\`\`\``,
+          )
+        }
+        catch {
+          fileContexts.push(
+            `[FILE: ${att.fileName}] (${att.mimeType}, ${formatFileSize(att.size)}) - binary file, content not displayed`,
+          )
+        }
+      }
+      else {
+        fileContexts.push(
+          `[FILE: ${att.fileName}] (${att.mimeType}, ${formatFileSize(att.size)}) - binary file, content not displayed`,
+        )
+      }
+    }
+  }
+
+  if (fileContexts.length > 0) {
+    const additionalContext = fileContexts.join('\n\n')
+    enrichedText = enrichedText
+      ? `${enrichedText}\n\n--- Attached Files ---\n${additionalContext}`
+      : `Please review these files:\n\n${additionalContext}`
+  }
 
   // optimistic clear without deleting draft from localStorage immediately
   isOptimisticClearing = true
@@ -282,7 +387,8 @@ async function handleSend() {
       })
     }
     else {
-      await ingest(textToSend, {
+      // ── Use enrichedText (with injected file contents) ──
+      await ingest(enrichedText, {
         model: activeModel.value,
         chatProvider: activeProvider.value,
         providerConfig,
@@ -298,25 +404,19 @@ async function handleSend() {
       messageInput.value = textToSend
       attachments.value = attachmentsToSend.map(att => ({
         ...att,
-        url: URL.createObjectURL(new Blob([Uint8Array.from(atob(att.data), c => c.charCodeAt(0))], { type: att.mimeType })),
+        url: att.url || URL.createObjectURL(
+          new Blob([Uint8Array.from(atob(att.data), c => c.charCodeAt(0))], { type: att.mimeType }),
+        ),
       }))
     }
     toast.error('Message failed to send. Draft restored.')
   }
 }
 
+// ── Handle file paste (now handles all file types) ──
 async function handleFilePaste(files: File[]) {
   for (const file of files) {
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        const base64Data = (e.target?.result as string)?.split(',')[1]
-        if (base64Data) {
-          addImageAttachmentFromBase64(base64Data, file.type, file.name)
-        }
-      }
-      reader.readAsDataURL(file)
-    }
+    addFileAttachment(file)
   }
 }
 
@@ -402,9 +502,18 @@ async function captureAndSendScreenshot() {
 }
 
 const isDragging = ref(false)
+const imageInput = useTemplateRef<HTMLInputElement>('imageInput')
 const fileInput = useTemplateRef<HTMLInputElement>('fileInput')
 
-function handleFileSelect(event: Event) {
+function handleImageFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement
+  if (target.files?.length) {
+    handleFilePaste(Array.from(target.files))
+  }
+  target.value = ''
+}
+
+function handleGeneralFileSelect(event: Event) {
   const target = event.target as HTMLInputElement
   if (target.files?.length) {
     handleFilePaste(Array.from(target.files))
@@ -621,7 +730,13 @@ watch(modalSearchTerm, (term) => {
     @drop.prevent="handleDrop"
     @keydown.escape="closePreview"
   >
-    <input ref="fileInput" type="file" accept="image/*" class="hidden" multiple @change="handleFileSelect">
+    <!-- Image file input (for ChatImagesPopover attach) -->
+    <input ref="imageInput" type="file" accept="image/*" class="hidden" multiple @change="handleImageFileSelect">
+    <!-- Generic file input (for document/code files) -->
+    <input ref="fileInput" type="file"
+      accept=".pdf,.txt,.md,.json,.xml,.csv,.ts,.js,.py,.sh,.yaml,.yml,.html,.css,.rs,.toml,.log,.env,.c,.cpp,.h,.java,.go,.rb,.php,.vue,.tsx,.jsx,.svelte,.astro,.sql,.graphql,.proto,.dockerfile,.editorconfig,.gitignore,.npmrc"
+      class="hidden" multiple @change="handleGeneralFileSelect">
+
     <div w-full flex-1 overflow-hidden>
       <ChatHistory
         :messages="historyMessages"
@@ -744,10 +859,23 @@ watch(modalSearchTerm, (term) => {
       </div>
     </div>
 
+    <!-- ── Attachment Preview Area (supports images + files) ── -->
     <div v-if="attachments.length > 0" class="flex flex-wrap gap-2 border-t border-primary-100 p-2">
       <div v-for="(attachment, index) in attachments" :key="index" class="relative">
-        <img :src="attachment.url" class="h-20 w-20 rounded-md object-cover">
-        <button class="absolute right-1 top-1 h-5 w-5 flex items-center justify-center rounded-full bg-red-500 text-xs text-white" @click="removeAttachment(index)">
+        <!-- Image preview -->
+        <img v-if="attachment.type === 'image' && attachment.url"
+             :src="attachment.url"
+             class="h-20 w-20 rounded-md object-cover shadow-sm">
+        <!-- File preview -->
+        <div v-else
+             class="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 p-2 shadow-sm dark:border-neutral-700 dark:bg-neutral-800">
+          <div class="i-solar:file-text-bold-duotone text-2xl text-primary-500 dark:text-primary-400" />
+          <span class="w-full truncate text-center text-[8px] text-neutral-500 font-medium leading-tight">
+            {{ attachment.fileName }}
+          </span>
+        </div>
+        <button class="absolute -right-1 -top-1 z-10 h-5 w-5 flex items-center justify-center rounded-full bg-red-500 text-xs text-white shadow-sm transition-transform hover:scale-110"
+                @click="removeAttachment(index)">
           &times;
         </button>
       </div>
@@ -824,11 +952,25 @@ watch(modalSearchTerm, (term) => {
         :imagine-mode="isImagineMode"
         :hide-toolbar-style="true"
         @toggle-imagine="isImagineMode = !isImagineMode"
-        @attach="fileInput?.click()"
+        @attach="imageInput?.click()"
         @screenshot="handleScreenshotClick"
         @view-journal="stageBackgroundDialogOpen = true"
         @open-studio="navigateToConceptStudio"
       />
+
+      <!-- ── NEW: File upload button ── -->
+      <button
+        class="max-h-[10lh] min-h-[1lh]"
+        bg="neutral-100 dark:neutral-800"
+        text="lg neutral-500 dark:neutral-400"
+        hover:text="primary-500 dark:primary-400"
+        flex items-center justify-center rounded-md p-2 outline-none
+        transition-colors transition-transform active:scale-95
+        title="Attach File"
+        @click="fileInput?.click()"
+      >
+        <div class="i-solar:paperclip-bold-duotone" />
+      </button>
 
       <!-- Clear Messages (with safety hook) -->
       <button
